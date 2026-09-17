@@ -1,9 +1,9 @@
 /*
-Node-OpenDroneMap Node.js App and REST API to access OpenDroneMap.
-Copyright (C) 2016 Node-OpenDroneMap Contributors
+NodeODM App and REST API to access ODM.
+Copyright (C) 2016 NodeODM Contributors
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
+it under the terms of the GNU Affero General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
@@ -12,7 +12,7 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
+You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
@@ -31,6 +31,7 @@ const odmInfo = require('./odmInfo');
 const request = require('request');
 const ziputils = require('./ziputils');
 const statusCodes = require('./statusCodes');
+const logger = require('./logger');
 
 const download = function(uri, filename, callback) {
     request.head(uri, function(err, res, body) {
@@ -98,7 +99,7 @@ module.exports = {
             const userUuid = req.get('set-uuid');
     
             // Valid UUID and no other task with same UUID?
-            if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userUuid) && !TaskManager.singleton().find(userUuid)){
+            if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userUuid) && !TaskManager.singleton().find(userUuid)){
                 req.id = userUuid;
                 next();
             }else{
@@ -143,7 +144,7 @@ module.exports = {
         if (req.files && req.files.length > 0){
             res.json({success: true});
         }else{
-            res.json({error: "Need at least 1 file."});
+            res.json({error: "Need at least 1 file.", noRetry: true});
         }
     },
 
@@ -303,8 +304,11 @@ module.exports = {
                         else{
                             if (++retries < 20){
                                 logger.warn(`Cannot move ${srcPath}, probably caused by antivirus software (please disable it or add an exception), retrying (${retries})...`);
-                                setTimeout(2000, move);
-                            }else cb(err);
+                                setTimeout(move, 2000);
+                            } else {
+                                logger.error(`Unable to move temp images (${srcPath}) after 20 retries. Error: ${err}`);
+                                cb(err);
+                            }
                         }
                     });
                 }
@@ -362,13 +366,13 @@ module.exports = {
             },
 
             cb => {
-                // Find any *.txt (GCP) file and move it to the data/<uuid>/gcp directory
+                // Find any *.txt (GCP) file or alignment file and move it to the data/<uuid>/gcp directory
                 // also remove any lingering zipurl.zip
                 fs.readdir(destImagesPath, (err, entries) => {
                     if (err) cb(err);
                     else {
                         async.eachSeries(entries, (entry, cb) => {
-                            if (/\.txt$/gi.test(entry)) {
+                            if (/\.txt$/gi.test(entry) || /^align\.(las|laz|tif)$/gi.test(entry)) {
                                 mv(path.join(destImagesPath, entry), path.join(destGcpPath, entry), cb);
                             }else if (/\.zip$/gi.test(entry)){
                                 fs.unlink(path.join(destImagesPath, entry), cb);

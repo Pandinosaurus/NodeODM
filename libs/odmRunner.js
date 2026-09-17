@@ -1,9 +1,9 @@
 /*
-Node-OpenDroneMap Node.js App and REST API to access OpenDroneMap.
-Copyright (C) 2016 Node-OpenDroneMap Contributors
+NodeODM App and REST API to access ODM.
+Copyright (C) 2016 NodeODM Contributors
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
+it under the terms of the GNU Affero General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
@@ -12,7 +12,7 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
+You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 "use strict";
@@ -25,13 +25,24 @@ let config = require('../config.js');
 let logger = require('./logger');
 let utils = require('./utils');
 
+const shQuote = s =>  {
+    s = String(s).replace(/"/g, "")
+    return `"${s}"`;
+}
+
 module.exports = {
     run: function(options, projectName, done, outputReceived){
         assert(projectName !== undefined, "projectName must be specified");
         assert(options["project-path"] !== undefined, "project-path must be defined");
         
-        const command = path.join(config.odm_path, os.platform() === "win32" ? "run.bat" : "run.sh"),
+        let command = path.join(config.odm_path, os.platform() === "win32" ? "run.bat" : "run.sh"),
               params = [];
+
+        if (os.platform() === "win32"){
+            // On Windows, we need to add quotes around the file path
+            // otherwise it doesn't work when there are spaces in the path
+            command = shQuote(command);
+        }
 
         for (var name in options){
             let value = options[name];
@@ -43,11 +54,11 @@ module.exports = {
 
             // We don't specify "--time true" (just "--time")
             if (typeof value !== 'boolean'){
-                params.push(value);
+                params.push(shQuote(value));
             }
         }
 
-        params.push(projectName);
+        params.push(shQuote(projectName));
 
         logger.info(`About to run: ${command} ${params.join(" ")}`);
 
@@ -73,7 +84,7 @@ module.exports = {
         // Launch
         const env = utils.clone(process.env);
         env.ODM_NONINTERACTIVE = 1;
-        let childProcess = spawn(command, params, {cwd: config.odm_path, env});
+        let childProcess = spawn(command, params, {cwd: config.odm_path, env, shell: true });
 
         childProcess
             .on('exit', (code, signal) => done(null, code, signal))
@@ -127,8 +138,9 @@ module.exports = {
             const env = utils.clone(process.env);
             env.ODM_OPTIONS_TMP_FILE = utils.tmpPath(".json");
             env.ODM_PATH = config.odm_path;
-            let childProcess = spawn(pythonExe, [path.join(__dirname, "..", "helpers", "odmOptionsToJson.py"),
-                    "--project-path", config.odm_path, "bogusname"], { env });
+
+            let childProcess = spawn(pythonExe, [shQuote(path.join(__dirname, "..", "helpers", "odmOptionsToJson.py")),
+                    "--project-path", shQuote(config.odm_path), "bogusname"], { env, shell: true });
     
             // Cleanup on done
             let handleResult = (err, result) => {

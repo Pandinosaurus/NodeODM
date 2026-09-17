@@ -1,9 +1,9 @@
 /*
-Node-OpenDroneMap Node.js App and REST API to access OpenDroneMap.
-Copyright (C) 2016 Node-OpenDroneMap Contributors
+NodeODM App and REST API to access ODM.
+Copyright (C) 2016 NodeODM Contributors
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
+it under the terms of the GNU Affero General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
@@ -12,7 +12,7 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
+You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 "use strict";
@@ -23,6 +23,7 @@ const glob = require('glob');
 const path = require('path');
 const logger = require('./logger');
 const config = require('../config');
+const https = require('https');
 const si = require('systeminformation');
 
 let s3 = null;
@@ -34,8 +35,18 @@ module.exports = {
 
     initialize: function(cb){
         if (config.s3Endpoint && config.s3Bucket){
+            if (config.s3IgnoreSSL){
+                AWS.config.update({
+                    httpOptions: {
+                      agent: new https.Agent({
+                        rejectUnauthorized: false
+                      })
+                    }
+                });
+            }
+
             const spacesEndpoint = new AWS.Endpoint(config.s3Endpoint);
-            
+
             const s3Config = {
                 endpoint: spacesEndpoint,
                 signatureVersion: ('v' + config.s3SignatureVersion) || 'v4',
@@ -62,7 +73,7 @@ module.exports = {
                     logger.info("Connected to S3");
                     cb();
                 }else{
-                    cb(new Error("Cannot connect to S3. Check your S3 configuration: " + err.code));
+                    cb(new Error(`Cannot connect to S3. Check your S3 configuration: ${err.message} (${err.code})`));
                 }
             });
         }else cb();
@@ -107,15 +118,20 @@ module.exports = {
                 const filename = path.basename(file.dest);
                 progress[filename] = 0;
 
-                s3.upload({
+                let uploadCfg = {
                     Bucket: bucket,
                     Key: file.dest,
-                    Body: fs.createReadStream(file.src),
-                    ACL: config.s3ACL
-                }, {partSize, queueSize: concurrency}, err => {
+                    Body: fs.createReadStream(file.src)
+                }
+                
+                if (config.s3ACL != "none") {
+                    uploadCfg.ACL = config.s3ACL;
+                }
+
+                s3.upload(uploadCfg, {partSize, queueSize: concurrency}, err => {
                     if (err){
                         logger.debug(err);
-                        const msg = `Cannot upload file to S3: ${err.code}, retrying... ${file.retries}`;
+                        const msg = `Cannot upload file to S3: ${err.message} (${err.code}), retrying... ${file.retries}`;
                         if (onOutput) onOutput(msg);
                         if (file.retries < MAX_RETRIES){
                             file.retries++;

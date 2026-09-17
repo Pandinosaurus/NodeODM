@@ -1,9 +1,9 @@
 /*
-Node-OpenDroneMap Node.js App and REST API to access OpenDroneMap.
-Copyright (C) 2016 Node-OpenDroneMap Contributors
+NodeODM App and REST API to access ODM.
+Copyright (C) 2016 NodeODM Contributors
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
+it under the terms of the GNU Affero General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
@@ -12,7 +12,7 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
+You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 "use strict";
@@ -50,6 +50,7 @@ module.exports = class Task{
         this.options = options;
         this.gcpFiles = [];
         this.geoFiles = [];
+        this.alignFiles = [];
         this.imageGroupsFiles = [];
         this.output = [];
         this.runningProcesses = [];
@@ -88,11 +89,16 @@ module.exports = class Task{
                                 this.imageGroupsFiles.push(file);
                             }else if (/\.txt$/gi.test(file)){
                                 this.gcpFiles.push(file);
+                            }else if (/^align\.(tif|laz|las)$/gi.test(file)){
+                                this.alignFiles.push(file);
                             }
+                            logger.debug(file);
                         });
                         logger.debug(`Found ${this.gcpFiles.length} GCP files (${this.gcpFiles.join(" ")}) for ${this.uuid}`);
                         logger.debug(`Found ${this.geoFiles.length} GEO files (${this.geoFiles.join(" ")}) for ${this.uuid}`);
                         logger.debug(`Found ${this.imageGroupsFiles.length} image groups files (${this.imageGroupsFiles.join(" ")}) for ${this.uuid}`);
+                        logger.debug(`Found ${this.alignFiles.length} alignment files (${this.alignFiles.join(" ")}) for ${this.uuid}`);
+
                         cb(null);
                     }
                 });
@@ -112,52 +118,40 @@ module.exports = class Task{
     }
 
     setPostProcessingOptsSteps(){
-        return [
-            cb => {
-                // If we need to post process results
-                // if pc-ept is supported (build entwine point cloud)
-                // we automatically add the pc-ept option to the task options by default
-                if (this.skipPostProcessing) cb();
-                else{
-                    odmInfo.supportsOption("pc-ept", (err, supported) => {
-                        if (err){
-                            console.warn(`Cannot check for supported option pc-ept: ${err}`);
-                        }else if (supported){
-                            if (!this.options.find(opt => opt.name === "pc-ept")){
-                                this.options.push({ name: 'pc-ept', value: true });
-                            }
-                        }
-                        cb();
-                    });
-                }
-            },
 
-            cb => {
+        const autoSet = (opt) => {
+            return cb => {
                 // If we need to post process results
-                // if cog is supported (build cloud optimized geotiffs)
-                // we automatically add the cog option to the task options by default
+                // if opt is supported
+                // we automatically add the opt to the task options by default
                 if (this.skipPostProcessing) cb();
                 else{
-                    odmInfo.supportsOption("cog", (err, supported) => {
+                    odmInfo.supportsOption(opt, (err, supported) => {
                         if (err){
-                            console.warn(`Cannot check for supported option cog: ${err}`);
+                            console.warn(`Cannot check for supported option ${opt}: ${err}`);
                         }else if (supported){
-                            if (!this.options.find(opt => opt.name === "cog")){
-                                this.options.push({ name: 'cog', value: true });
+                            if (!this.options.find(o => o.name === opt)){
+                                this.options.push({ name: opt, value: true });
                             }
                         }
                         cb();
                     });
                 }
             }
+        };
+
+        return [
+            autoSet("pc-ept"),
+            autoSet("cog"),
+            autoSet("gltf")
         ];
     }
 
     static CreateFromSerialized(taskJson, done){
-        const task = new Task(taskJson.uuid, 
-            taskJson.name, 
+        const task = new Task(taskJson.uuid,
+            taskJson.name,
             taskJson.options,
-            taskJson.webhook, 
+            taskJson.webhook,
             taskJson.skipPostProcessing,
             taskJson.outputs,
             taskJson.dateCreated);
@@ -206,7 +200,7 @@ module.exports = class Task{
         }else{
             return false; // Invalid
         }
-        
+
         return path.join(this.getProjectFolderPath(), filename);
     }
 
@@ -229,7 +223,7 @@ module.exports = class Task{
 
     updateProgress(globalProgress){
         globalProgress = Math.min(100, Math.max(0, globalProgress));
-        
+
         // Progress updates are asynchronous (via UDP)
         // so things could be out of order. We ignore all progress
         // updates that are lower than what we might have previously received.
@@ -239,9 +233,9 @@ module.exports = class Task{
     }
 
     updateProcessingTime(resetTime){
-        this.processingTime = resetTime ?
+        this.processingTime = (resetTime || this.dateStarted === 0) ?
                                 -1		:
-                                new Date().getTime() - this.dateCreated;
+                                new Date().getTime() - this.dateStarted;
     }
 
     startTrackingProcessingTime(){
@@ -285,7 +279,7 @@ module.exports = class Task{
                     // the process will immediately terminate.
                     // For eaxmple in the case of the ODM process, the process will continue running for a while
                     // This might need to be fixed on ODM's end.
-                    
+
                     // During testing, proc is undefined
                     if (proc) kill(proc.pid);
                 });
@@ -307,15 +301,15 @@ module.exports = class Task{
             this.stopTrackingProcessingTime();
             done(err);
         };
-        
+
         const postProcess = () => {
             const createZipArchive = (outputFilename, files) => {
                 return (done) => {
                     this.output.push(`Compressing ${outputFilename}\n`);
 
                     const zipFile = path.resolve(this.getAssetsArchivePath(outputFilename));
-                    const sourcePath = !config.test ? 
-                                        this.getProjectFolderPath() : 
+                    const sourcePath = !config.test ?
+                                        this.getProjectFolderPath() :
                                         path.join("tests", "processing_results");
 
                     const pathsToArchive = [];
@@ -365,15 +359,15 @@ module.exports = class Task{
 
                     archive.pipe(output);
                     let globs = [];
-                    
-                    const sourcePath = !config.test ? 
-                                        this.getProjectFolderPath() : 
+
+                    const sourcePath = !config.test ?
+                                        this.getProjectFolderPath() :
                                         path.join("tests", "processing_results");
 
                     // Process files and directories first
                     files.forEach(file => {
                         let filePath = path.join(sourcePath, file);
-                        
+
                         // Skip non-existing items
                         if (!fs.existsSync(filePath)) return;
 
@@ -421,7 +415,7 @@ module.exports = class Task{
                 return (done) => {
                     this.runningProcesses.push(
                         processRunner.runPostProcessingScript({
-                            projectFolderPath: this.getProjectFolderPath() 
+                            projectFolderPath: this.getProjectFolderPath()
                         }, (err, code, _) => {
                             if (err) done(err);
                             else{
@@ -447,22 +441,28 @@ module.exports = class Task{
             }
 
             // All paths are relative to the project directory (./data/<uuid>/)
-            let allPaths = ['odm_orthophoto/odm_orthophoto.tif', 
+            let allPaths = ['odm_orthophoto/odm_orthophoto.tif',
+                              'odm_orthophoto/odm_orthophoto.tfw',
                               'odm_orthophoto/odm_orthophoto.png',
+                              'odm_orthophoto/odm_orthophoto.wld',
                               'odm_orthophoto/odm_orthophoto.mbtiles',
                               'odm_orthophoto/odm_orthophoto.kmz',
+                              'odm_orthophoto/odm_orthophoto_extent.dxf',
+                              'odm_orthophoto/cutline.gpkg',
                               'odm_georeferencing', 'odm_texturing',
                               'odm_dem/dsm.tif', 'odm_dem/dtm.tif', 'dsm_tiles', 'dtm_tiles',
-                              'orthophoto_tiles', 'potree_pointcloud', 'entwine_pointcloud', 
+                              'odm_dem/dsm.euclideand.tif', 'odm_dem/dtm.euclideand.tif',
+                              'orthophoto_tiles', 'potree_pointcloud', 'entwine_pointcloud',
+                              '3d_tiles',
                               'images.json', 'cameras.json',
                               'task_output.txt', 'log.json',
                               'odm_report'];
-            
+
             // Did the user request different outputs than the default?
             if (this.outputs.length > 0) allPaths = this.outputs;
 
             let tasks = [];
-            
+
             if (config.test){
                 if (config.testSkipOrthophotos){
                     logger.info("Test mode will skip orthophoto generation");
@@ -472,7 +472,7 @@ module.exports = class Task{
                         allPaths.splice(allPaths.indexOf(dir), 1);
                     });
                 }
-                
+
                 if (config.testSkipDems){
                     logger.info("Test mode will skip DEMs generation");
 
@@ -493,7 +493,7 @@ module.exports = class Task{
                 }
 
             }
-            
+
             // postprocess.sh is still here for legacy/backward compatibility
             // purposes, but we might remove it in the future. The new logic
             // instructs the processing engine to do the necessary processing
@@ -503,13 +503,13 @@ module.exports = class Task{
             if (os.platform() !== "win32" && !this.skipPostProcessing){
                 tasks.push(runPostProcessingScript());
             }
-            
+
             const taskOutputFile = path.join(this.getProjectFolderPath(), 'task_output.txt');
             tasks.push(saveTaskOutput(taskOutputFile));
 
             const archiveFunc = config.has7z ? createZipArchive : createZipArchiveLegacy;
             tasks.push(archiveFunc('all.zip', allPaths));
-            
+
             // Upload to S3 all paths + all.zip file (if config says so)
             if (S3.enabled()){
                 tasks.push((done) => {
@@ -519,8 +519,8 @@ module.exports = class Task{
                     }else{
                         s3Paths = ['all.zip'];
                     }
-                    
-                    S3.uploadPaths(this.getProjectFolderPath(), config.s3Bucket, this.uuid, s3Paths, 
+
+                    S3.uploadPaths(this.getProjectFolderPath(), config.s3Bucket, this.uuid, s3Paths,
                         err => {
                             if (!err) this.output.push("Done uploading to S3!");
                             done(err);
@@ -556,6 +556,9 @@ module.exports = class Task{
             }
             if (this.geoFiles.length > 0){
                 runnerOptions.geo = fs.realpathSync(path.join(this.getGcpFolderPath(), this.geoFiles[0]));
+            }
+            if (this.alignFiles.length > 0){
+                runnerOptions.align = fs.realpathSync(path.join(this.getGcpFolderPath(), this.alignFiles[0]));
             }
             if (this.imageGroupsFiles.length > 0){
                 runnerOptions["split-image-groups"] = fs.realpathSync(path.join(this.getGcpFolderPath(), this.imageGroupsFiles[0]));
@@ -664,14 +667,14 @@ module.exports = class Task{
     getOutput(startFromLine = 0){
         return this.output.slice(startFromLine, this.output.length);
     }
-    
-    // Reads the contents of the tasks's 
+
+    // Reads the contents of the tasks's
     // images.json and returns its JSON representation
     readImagesDatabase(callback){
-        const imagesDbPath = !config.test ? 
+        const imagesDbPath = !config.test ?
                              path.join(this.getProjectFolderPath(), 'images.json') :
                              path.join('tests', 'processing_results', 'images.json');
-    
+
         fs.readFile(imagesDbPath, 'utf8', (err, data) => {
             if (err) callback(err);
             else{
@@ -686,7 +689,7 @@ module.exports = class Task{
     }
 
     callWebhooks(){
-        // Hooks can be passed via command line 
+        // Hooks can be passed via command line
         // or for each individual task
         const hooks = [this.webhook, config.webhook];
 

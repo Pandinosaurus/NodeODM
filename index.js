@@ -1,9 +1,9 @@
 /*
-Node-OpenDroneMap Node.js App and REST API to access OpenDroneMap.
-Copyright (C) 2016 Node-OpenDroneMap Contributors
+NodeODM App and REST API to access ODM.
+Copyright (C) 2016 NodeODM Contributors
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
+it under the terms of the GNU Affero General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
@@ -12,12 +12,13 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
+You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 "use strict";
 
 const fs = require('fs');
+const path = require('path');
 const config = require('./config.js');
 const packageJson = JSON.parse(fs.readFileSync('./package.json'));
 
@@ -142,7 +143,7 @@ app.post('/task/new/init', authCheck, taskNew.assignUUID, formDataParser, taskNe
  *        -
  *          name: images
  *          in: formData
- *          description: Images to process, plus optional files such as a GEO file (geo.txt), image groups file (image_groups.txt), GCP file (*.txt) or seed file (seed.zip). If included, the GCP file should have .txt extension. If included, the seed archive pre-polulates the task directory with its contents.
+ *          description: Images to process, plus optional files such as a GEO file (geo.txt), image groups file (image_groups.txt), GCP file (*.txt), seed file (seed.zip) or alignment files (align.las, align.laz, align.tif). If included, the GCP file should have .txt extension. If included, the seed archive pre-polulates the task directory with its contents.
  *          required: true
  *          type: file
  *        -
@@ -209,7 +210,7 @@ app.post('/task/new/commit/:uuid', authCheck, taskNew.getUUID, taskNew.handleCom
  *        -
  *          name: images
  *          in: formData
- *          description: Images to process, plus optional files such as a GEO file (geo.txt), image groups file (image_groups.txt), GCP file (*.txt) or seed file (seed.zip). If included, the GCP file should have .txt extension. If included, the seed archive pre-polulates the task directory with its contents.
+ *          description: Images to process, plus optional files such as a GEO file (geo.txt), image groups file (image_groups.txt), GCP file (*.txt), seed file (seed.zip) or alignment files (align.las, align.laz, align.tif). If included, the GCP file should have .txt extension. If included, the seed archive pre-polulates the task directory with its contents.
  *          required: false
  *          type: file
  *        -
@@ -285,6 +286,10 @@ app.post('/task/new', authCheck, taskNew.assignUUID, taskNew.uploadImages, (req,
     req.body = req.body || {};
     if ((!req.files || req.files.length === 0) && !req.body.zipurl) req.error = "Need at least 1 file or a zip file url.";
     else if (config.maxImages && req.files && req.files.length > config.maxImages) req.error = `${req.files.length} images uploaded, but this node can only process up to ${config.maxImages}.`;
+    else if ((!req.files || req.files.length === 0) && req.body.zipurl) {
+        const srcPath = path.join("tmp", req.id);
+        fs.mkdirSync(srcPath);
+    }
     next();
 }, taskNew.createTask);
 
@@ -918,10 +923,29 @@ let commands = [
         taskManager = TaskManager.singleton();
     },
     cb => {
-        server = app.listen(config.port, err => {
-            if (!err) logger.info('Server has started on port ' + String(config.port));
-            cb(err);
-        });
+        const startServer = (port, cb) => {
+            server = app.listen(parseInt(port), (err) => {
+                if (!err) logger.info('Server has started on port ' + String(port));
+                cb(err);
+            });
+            server.on("error", cb);
+        };
+
+        const tryStartServer = (port, cb) => {
+            startServer(port, (err) => {
+                if (err && err.code === 'EADDRINUSE' && port < 5000){
+                    tryStartServer(port + 1, cb);
+                }else cb(err);
+            });
+        };
+
+        if (Number.isInteger(parseInt(config.port))){
+            startServer(config.port, cb);
+        }else if (config.port === "auto"){
+            tryStartServer(3000, cb);
+        }else{
+            cb(new Error(`Invalid port: ${config.port}`));
+        }
     }
 ];
 
@@ -934,7 +958,7 @@ if (config.powercycle) {
 
 async.series(commands, err => {
     if (err) {
-        logger.error("Error during startup: " + err.message);
+        logger.error(err.message);
         process.exit(1);
     }
 });
